@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOSS 聊天助手 · 配置</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>BOSS 聊天助手</h1>
+        <p class="subtitle">填写并保存模型配置和个人信息</p>
+      </header>
+
+      <section class="panel">
+        <h2>模型配置</h2>
+        <form id="settings-form">
+          <div class="grid">
+            <label>
+              <span class="label-row">API Base <span class="required">*</span></span>
+              <input name="api_base" placeholder="https://api.openai.com/v1" required />
+            </label>
+            <label>
+              <span class="label-row">API Key <span class="required">*</span></span>
+              <input name="api_key" type="password" required />
+            </label>
+            <label>
+              <span class="label-row">模型名称 <span class="required">*</span></span>
+              <input name="model" placeholder="gpt-4o-mini" required />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">保存模型配置</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>个人信息</h2>
+        <form id="profile-form">
+          <div class="grid">
+            <label>
+              <span class="label-row">当前城市 <span class="required">*</span></span>
+              <input name="city" required />
+            </label>
+            <label>
+              <span class="label-row">离职状态 <span class="required">*</span></span>
+              <input name="status" required />
+            </label>
+            <label>
+              <span class="label-row">工作年限 <span class="required">*</span></span>
+              <input name="years" required />
+            </label>
+            <label>
+              <span class="label-row">学历 <span class="required">*</span></span>
+              <input name="degree" required />
+            </label>
+            <label>
+              <span class="label-row">求职方向 <span class="required">*</span></span>
+              <input name="direction" required />
+            </label>
+            <label>
+              <span class="label-row">技术栈（逗号分隔） <span class="required">*</span></span>
+              <input name="tech_stack" required />
+            </label>
+          </div>
+          <div class="grid">
+            <label>
+              上一份薪资
+              <input name="salary_prev" placeholder="例：25k*16 或 税前30万/年" />
+            </label>
+            <label>
+              离职时间
+              <input name="leave_time" placeholder="例：2024-12 / 1个月可入职" />
+            </label>
+            <label>
+              离职原因
+              <input name="leave_reason" placeholder="例：项目收尾/寻求新挑战" />
+            </label>
+            <label>
+              项目亮点
+              <input name="highlights" placeholder="例：负责XX提效/落地YY" />
+            </label>
+          </div>
+          <label class="full">
+            自定义信息（key:value，每行一条）
+            <textarea name="extras" rows="4" placeholder="例：&#10;证书: 阿里云ACP&#10;语言: 英语CET-6"></textarea>
+          </label>
+          <div class="actions">
+            <button type="submit">保存个人信息</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="index.js"></script>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "BOSS 聊天助手",
+  "version": "0.0.1",
+  "description": "Boss 直聘聊天页监听与配置保存。",
+  "permissions": ["storage"],
+  "options_page": "src/options/index.html",
+  "action": {
+    "default_title": "BOSS 聊天助手",
+    "default_popup": "src/popup/index.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.zhipin.com/web/geek/chat*"],
+      "js": ["src/content/index.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
