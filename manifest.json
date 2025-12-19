@@ -4,10 +4,14 @@
   "version": "0.0.1",
   "description": "Boss 直聘聊天页监听与配置保存。",
   "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
   "options_page": "src/options/index.html",
   "action": {
     "default_title": "BOSS 聊天助手",
     "default_popup": "src/popup/index.html"
+  },
+  "background": {
+    "service_worker": "src/background/sw.js"
   },
   "content_scripts": [
     {

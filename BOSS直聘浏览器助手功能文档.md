@@ -88,19 +88,3 @@ HR 经常不看个人信息页，重复询问基础信息（如当前城市、�
 
 ## 阶段2：聊天页绑定JD后的意向判断与回复
 ## 阶段3：岗位浏览与初筛（带JD上下文进入聊天）
-
-## 阶段1开发计划（半页版）
-
-- 范围：仅做聊天页静态问题自动回复；不做自动发送、JD 解析、岗位筛选。
-- 产出：MV3 扩展（content script + background + options），支持个人信息配置、消息抽取、模型调用、草稿填充、草稿保存与提示。
-- 依赖/接口：
-  - 模型 API：HTTP POST（OpenAI 兼容优先），输入 `{profile_static, conversationKey, messages}`，输出 `{conversationKey, reply, can_answer, missing_fields}`；超时 8-10s，失败重试 1 次。
-  - 存储：`chrome.storage.local`，键：`profile_static`（含 schema_version）、`drafts`、`whitelist`、`settings`（开关/阈值）。
-- 模块与任务：
-  1) Options 配置页：表单校验（必填：城市/离职状态/年限/学历/方向/技术栈），JSON 导入导出，版本号校验。
-  2) Content Script：挂载 `/web/geek/chat`，提取 conversationKey、最近 N 条消息（含角色），监听新 HR 消息触发生成；输入框状态检测、草稿填充（仅空时填）、切会话草稿保存与“一键填充”提示。
-  3) Background(Service Worker)：模型请求封装（鉴权 header、超时、重试、速率限制），错误提示与缺字段提示。
-  4) 风控与体验：全局节流（如每 5s 至少间隔），同一 HR 消息只触发一次；默认半自动（不自动发送），显式 toast/提示。
-  5) 工具与构建：打包/发布脚本（zip），开发模式热加载说明。
-- 测试要点：无配置不触发；缺字段时提示；切换会话不误填；输入框有内容不覆盖；生成失败提示可见；长对话截断后仍能生成。
-- 时间预估：3-4 人日（内容脚本 1d，背景 0.5d，配置页 0.5-1d，填充/草稿 0.5d，测试/打包 0.5d）。
