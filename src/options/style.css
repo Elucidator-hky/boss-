@@ -125,3 +125,77 @@ button:hover {
   background: #1e4fc8;
   border-color: #1e4fc8;
 }
+
+/* 模型配置 - 两行模式 */
+.hint {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.config-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  transition: border-color 0.2s;
+}
+
+.config-row:has(input[type="radio"]:checked) {
+  border-color: var(--primary);
+  background: var(--primary-weak);
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  width: 280px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.mode-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.config-fields {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+}
+
+.config-fields input {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-tips {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.model-tips strong {
+  color: var(--text);
+}

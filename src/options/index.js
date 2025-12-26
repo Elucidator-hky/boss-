@@ -6,9 +6,9 @@
  */
 
 const DEFAULT_SETTINGS = {
-  api_base: "https://api.openai.com/v1",
+  api_base: "",
   api_key: "",
-  model: "gpt-4o-mini"
+  model: ""
 };
 
 const DEFAULT_PROFILE = {
@@ -22,7 +22,8 @@ const DEFAULT_PROFILE = {
   salary_prev: "",
   leave_time: "",
   leave_reason: "",
-  highlights: "",
+  skills: "",
+  projects: "",
   extras: {}
 };
 
@@ -91,6 +92,18 @@ function fillForm(form, data) {
 }
 
 /**
+ * 填充模型配置表单
+ */
+function fillSettingsForm(form, settings) {
+  if (!form) return;
+  const s = { ...DEFAULT_SETTINGS, ...settings };
+
+  form.querySelector("[name='api_base']").value = s.api_base || "";
+  form.querySelector("[name='api_key']").value = s.api_key || "";
+  form.querySelector("[name='model']").value = s.model || "";
+}
+
+/**
  * 把 textarea 的 key:value 文本解析成对象。
  */
 function parseExtras(text) {
@@ -124,9 +137,31 @@ async function init() {
   profileForm.addEventListener("submit", (e) => handleSaveProfile(e, profileForm));
 
   try {
-    const { settings, profile_static } = await storageGet(["settings", "profile_static"]);
-    fillForm(settingsForm, { ...DEFAULT_SETTINGS, ...(settings || {}) });
+    const { settings, profile_static, _scroll_to_section } = await storageGet([
+      "settings",
+      "profile_static",
+      "_scroll_to_section"
+    ]);
+    fillSettingsForm(settingsForm, settings);
     fillForm(profileForm, { ...DEFAULT_PROFILE, ...(profile_static || {}) });
+
+    // 滚动到指定区块
+    if (_scroll_to_section) {
+      const target = document.getElementById(_scroll_to_section);
+      if (target) {
+        setTimeout(() => {
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          // 高亮效果
+          target.style.transition = "box-shadow 0.3s";
+          target.style.boxShadow = "0 0 0 3px #00bebd";
+          setTimeout(() => {
+            target.style.boxShadow = "";
+          }, 1500);
+        }, 100);
+      }
+      // 清除标记
+      chrome.storage.local.remove("_scroll_to_section");
+    }
   } catch (err) {
     console.error(err);
     alert(err?.message || "读取配置失败");
@@ -140,21 +175,26 @@ async function handleSaveSettings(e, settingsForm) {
   e.preventDefault();
   const raw = readForm(settingsForm);
 
-  const missing = ["api_base", "api_key", "model"].filter((k) => !String(raw[k] || "").trim());
+  const settings = {
+    api_base: String(raw.api_base || "").trim(),
+    api_key: String(raw.api_key || "").trim(),
+    model: String(raw.model || "").trim()
+  };
+
+  const missing = [];
+  if (!settings.api_base) missing.push("API Base");
+  if (!settings.api_key) missing.push("API Key");
+  if (!settings.model) missing.push("模型名");
+
   if (missing.length) {
-    alert(`模型配置未填：${missing.join("，")}`);
+    alert(`配置未填：${missing.join("、")}`);
     return;
   }
 
-  const settings = {
-    api_base: String(raw.api_base).trim(),
-    api_key: String(raw.api_key).trim(),
-    model: String(raw.model).trim()
-  };
-
   try {
     await storageSet({ settings });
-    console.log("[BOSS Chat Assistant] 模型配置已保存");
+    console.log("[BOSS Chat Assistant] 模型配置已保存:", settings);
+    alert("模型配置已保存");
   } catch (err) {
     console.error(err);
     alert(err?.message || "保存模型配置失败");
@@ -186,13 +226,15 @@ async function handleSaveProfile(e, profileForm) {
     salary_prev: String(raw.salary_prev || "").trim(),
     leave_time: String(raw.leave_time || "").trim(),
     leave_reason: String(raw.leave_reason || "").trim(),
-    highlights: String(raw.highlights || "").trim(),
+    skills: String(raw.skills || "").trim(),
+    projects: String(raw.projects || "").trim(),
     extras: parseExtras(raw.extras)
   };
 
   try {
     await storageSet({ profile_static });
     console.log("[BOSS Chat Assistant] 个人信息已保存");
+    alert("个人信息已保存");
   } catch (err) {
     console.error(err);
     alert(err?.message || "保存个人信息失败");

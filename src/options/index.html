@@ -13,21 +13,22 @@
         <p class="subtitle">填写并保存模型配置和个人信息</p>
       </header>
 
-      <section class="panel">
+      <section class="panel" id="api">
         <h2>模型配置</h2>
+        <p class="hint">推荐模型：deepseek-chat、qwen-plus、qwen-max（推理模型准确率更高但响应更慢：deepseek-reasoner、qwq-32b）</p>
         <form id="settings-form">
           <div class="grid">
             <label>
               <span class="label-row">API Base <span class="required">*</span></span>
-              <input name="api_base" placeholder="https://api.openai.com/v1" required />
+              <input name="api_base" placeholder="如 https://api.deepseek.com/v1" required />
             </label>
             <label>
               <span class="label-row">API Key <span class="required">*</span></span>
-              <input name="api_key" type="password" required />
+              <input name="api_key" type="password" placeholder="sk-..." required />
             </label>
             <label>
-              <span class="label-row">模型名称 <span class="required">*</span></span>
-              <input name="model" placeholder="gpt-4o-mini" required />
+              <span class="label-row">模型名 <span class="required">*</span></span>
+              <input name="model" placeholder="如 deepseek-chat / qwen-plus" required />
             </label>
           </div>
           <div class="actions">
@@ -36,7 +37,7 @@
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel" id="profile">
         <h2>个人信息</h2>
         <form id="profile-form">
           <div class="grid">
@@ -78,11 +79,15 @@
               离职原因
               <input name="leave_reason" placeholder="例：项目收尾/寻求新挑战" />
             </label>
-            <label>
-              项目亮点
-              <input name="highlights" placeholder="例：负责XX提效/落地YY" />
-            </label>
           </div>
+          <label class="full">
+            职业技能（详细描述你的技术能力）
+            <textarea name="skills" rows="3" placeholder="例：&#10;熟练掌握 Java、Spring Boot、MyBatis，有微服务开发经验&#10;熟悉 MySQL、Redis、Kafka，了解高并发优化&#10;熟悉 Docker、K8s 容器化部署"></textarea>
+          </label>
+          <label class="full">
+            项目经验
+            <textarea name="projects" rows="4" placeholder="例：&#10;1. 订单系统重构：主导设计微服务架构，将QPS从500提升到5000，支撑日订单100万+&#10;2. 数据中台搭建：负责数据采集模块开发，实现实时数据同步，延迟降低到秒级"></textarea>
+          </label>
           <label class="full">
             自定义信息（key:value，每行一条）
             <textarea name="extras" rows="4" placeholder="例：&#10;证书: 阿里云ACP&#10;语言: 英语CET-6"></textarea>

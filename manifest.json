@@ -3,7 +3,7 @@
   "name": "BOSS 聊天助手",
   "version": "0.0.1",
   "description": "Boss 直聘聊天页监听与配置保存。",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting", "tabs"],
   "host_permissions": ["<all_urls>"],
   "options_page": "src/options/index.html",
   "action": {
@@ -16,8 +16,20 @@
   "content_scripts": [
     {
       "matches": ["https://www.zhipin.com/web/geek/chat*"],
+      "js": ["src/content/inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.zhipin.com/web/geek/chat*"],
       "js": ["src/content/index.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/content/inject.js"],
+      "matches": ["https://www.zhipin.com/*"]
     }
   ]
 }
