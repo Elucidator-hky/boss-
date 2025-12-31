@@ -1,0 +1,24 @@
+# 构建输出
+dist/
+
+# 开发工具
+.claude/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.log
+*.tmp
+*.bak
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 打包密钥（重要：不要提交）
+*.pem
+*.key
