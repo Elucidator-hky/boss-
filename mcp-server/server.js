@@ -188,6 +188,37 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "search_jobs",
+    description:
+      "在 Boss 直聘发起职位搜索：跳转到搜索结果页（query 关键词 + 可选城市）。完成后用 read_jobs 读取结果列表。薪资/经验/学历等进一步筛选建议拿到列表后由 Claude 按数据过滤。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "搜索关键词，如「AI应用开发」「大模型」" },
+        city: {
+          type: "string",
+          description:
+            "城市名（支持：全国/北京/上海/广州/深圳/杭州/武汉/成都/重庆/南京/苏州/西安）或 9 位城市代码，留空为默认",
+        },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "navigate",
+    description:
+      "把 Boss 标签页导航到指定 zhipin.com 页面（仅限 www.zhipin.com 域）。常用：聊天页 https://www.zhipin.com/web/geek/chat 、推荐页 https://www.zhipin.com/web/geek/job-recommend",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "目标 URL，必须以 https://www.zhipin.com/ 开头" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "debug_dom",
     description:
       "【调试用】返回页面上指定 CSS 选择器命中的元素数量和 outerHTML 片段。Boss 页面 DOM 改版导致其它工具失效时，用它排查真实结构。",
@@ -216,8 +247,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   try {
     if (!TOOL_NAMES.has(name)) throw new Error("未知工具: " + name);
-    // 工具名与扩展命令名一一对应，直接透传
-    const data = await callExtension(name, args || {});
+    // 工具名与扩展命令名一一对应，直接透传；导航类命令要等页面加载，超时放宽
+    const timeout = name === "search_jobs" || name === "navigate" ? 30000 : 15000;
+    const data = await callExtension(name, args || {}, timeout);
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   } catch (e) {
     return { content: [{ type: "text", text: "错误：" + e.message }], isError: true };

@@ -645,8 +645,70 @@ function buildUserPrompt(dialogue) {
     return picked;
   }
 
+  const CITY_CODES = {
+    全国: "100010000",
+    北京: "101010100",
+    上海: "101020100",
+    广州: "101280100",
+    深圳: "101280600",
+    杭州: "101210100",
+    武汉: "101200100",
+    成都: "101270100",
+    重庆: "101040100",
+    南京: "101190100",
+    苏州: "101190400",
+    西安: "101110100",
+  };
+
+  /** 打开/复用 Boss 标签导航到指定 URL，等加载 + 渲染 */
+  async function bgOpenUrl(url) {
+    let tab = await getBossTab();
+    if (tab) {
+      await chrome.tabs.update(tab.id, { url });
+    } else {
+      tab = await chrome.tabs.create({ url, active: true });
+    }
+    try {
+      await waitForTabLoad(tab.id, 10000);
+    } catch (_) {}
+    await sleep(2500); // 等 JS 渲染 + 列表接口返回（inject.js 才能拦到）
+    return tab;
+  }
+
+  async function bgSearchJobs(args) {
+    const query = String(args?.query || "").trim();
+    if (!query) return { ok: false, error: "query 不能为空" };
+    const city = String(args?.city || "").trim();
+    const code = CITY_CODES[city] || (/^\d{9}$/.test(city) ? city : "");
+    if (city && !code) {
+      return {
+        ok: false,
+        error: "不认识的城市「" + city + "」，支持：" + Object.keys(CITY_CODES).join("/") + "，或直接传 9 位城市代码",
+      };
+    }
+    const url =
+      "https://www.zhipin.com/web/geek/job?query=" +
+      encodeURIComponent(query) +
+      (code ? "&city=" + code : "");
+    await bgOpenUrl(url);
+    return { ok: true, data: { url, note: "已打开搜索结果页，接着用 read_jobs 读取列表" } };
+  }
+
+  async function bgNavigate(args) {
+    const url = String(args?.url || "").trim();
+    if (!/^https:\/\/www\.zhipin\.com\//.test(url)) {
+      return { ok: false, error: "只允许打开 https://www.zhipin.com/ 下的页面" };
+    }
+    await bgOpenUrl(url);
+    return { ok: true, data: { url, note: "已打开" } };
+  }
+
   async function handleCommand(msg) {
     try {
+      // 这两个命令由后台直接处理（涉及标签导航，不经页面脚本）
+      if (msg.cmd === "search_jobs") return await bgSearchJobs(msg.args);
+      if (msg.cmd === "navigate") return await bgNavigate(msg.args);
+
       const tab = await getBossTab();
       if (!tab) {
         return { ok: false, error: "没有打开的 Boss 直聘标签页，请先在 Chrome 打开 zhipin.com。" };
