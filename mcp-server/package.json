@@ -1,0 +1,17 @@
+{
+  "name": "boss-assistant-mcp",
+  "version": "0.1.0",
+  "description": "MCP server bridging Claude Code to the Boss 直聘 browser extension",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "boss-assistant-mcp": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

@@ -598,3 +598,123 @@ function buildSystemPrompt(profileStaticZh) {
 function buildUserPrompt(dialogue) {
   return "对话记录：\n" + dialogue;
 }
+
+// ============================================================================
+// MCP 桥接（新增）：维持一条到本地 MCP server 的 WebSocket，
+// 收到命令后转发给 bridge.js 执行，结果原路返回。
+// 与上面的 LLM 功能互不影响。
+// ============================================================================
+(function () {
+  const WS_URL = "ws://127.0.0.1:8765";
+  let ws = null;
+  let connecting = false;
+
+  function bglog(...a) {
+    console.log("[boss-assistant/bg]", ...a);
+  }
+
+  function safeSend(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(obj));
+      } catch (e) {
+        bglog("发送失败:", e.message);
+      }
+    }
+  }
+
+  async function getBossTab() {
+    // 1. 优先：最近聚焦的 Chrome 窗口里、当前正显示的 Boss 标签（= 用户眼前这个）
+    const [focused] = await chrome.tabs.query({
+      url: "https://www.zhipin.com/*",
+      active: true,
+      lastFocusedWindow: true,
+    });
+    if (focused) {
+      bglog("选中标签(聚焦窗口):", focused.url);
+      return focused;
+    }
+    // 2. 其次：聊天页标签（核心工作页面）
+    const tabs = await chrome.tabs.query({ url: "https://www.zhipin.com/*" });
+    if (!tabs.length) return null;
+    const picked =
+      tabs.find((t) => (t.url || "").includes("/web/geek/chat")) ||
+      tabs.find((t) => t.active) ||
+      tabs[0];
+    bglog("选中标签(兜底):", picked.url);
+    return picked;
+  }
+
+  async function handleCommand(msg) {
+    try {
+      const tab = await getBossTab();
+      if (!tab) {
+        return { ok: false, error: "没有打开的 Boss 直聘标签页，请先在 Chrome 打开 zhipin.com。" };
+      }
+      const resp = await chrome.tabs.sendMessage(tab.id, {
+        channel: "boss-bridge",
+        cmd: msg.cmd,
+        args: msg.args,
+      });
+      return resp || { ok: false, error: "bridge.js 无响应" };
+    } catch (e) {
+      return {
+        ok: false,
+        error:
+          "转发命令失败：" +
+          e.message +
+          "（若提示 Receiving end does not exist，请刷新一下 Boss 页面让 bridge.js 重新注入）",
+      };
+    }
+  }
+
+  function connect() {
+    if (connecting) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    connecting = true;
+    try {
+      ws = new WebSocket(WS_URL);
+    } catch (e) {
+      connecting = false;
+      bglog("创建 WebSocket 失败:", e.message);
+      return;
+    }
+    ws.onopen = () => {
+      connecting = false;
+      bglog("已连接 MCP server");
+    };
+    ws.onmessage = async (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (msg.type === "ping") {
+        safeSend({ type: "pong" });
+        return;
+      }
+      if (msg.cmd) {
+        const result = await handleCommand(msg);
+        safeSend({ id: msg.id, ...result });
+      }
+    };
+    ws.onclose = () => {
+      connecting = false;
+      ws = null;
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = () => {
+      connecting = false;
+    };
+  }
+
+  connect();
+  chrome.runtime.onStartup.addListener(connect);
+  chrome.runtime.onInstalled.addListener(connect);
+  // 定期唤醒 SW 并保活（MV3 SW 会被回收）
+  chrome.alarms.create("boss-mcp-keepalive", { periodInMinutes: 0.5 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "boss-mcp-keepalive") connect();
+  });
+})();

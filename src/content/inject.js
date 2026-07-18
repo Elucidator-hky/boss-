@@ -1,9 +1,21 @@
 /**
- * 注入到页面上下文的脚本（通过 manifest world: "MAIN"）
- * 拦截 XHR 请求，监听 historyMsg 和 getBossData API 响应
+ * 注入到页面上下文的脚本（通过 manifest world: "MAIN"，全站注入）
+ * 拦截 XHR/fetch 响应：
+ *  - 聊天页：historyMsg（职位描述）、getBossData（职位结构化数据）
+ *  - 推荐/搜索页：joblist（职位列表，含 encryptJobId/securityId）
  */
 (function() {
   console.log("[inject.js] 脚本已注入");
+
+  const WATCH_RE = /historyMsg|getBossData|joblist\.json|recommend\/job\/list/;
+
+  function routeResponse(url, responseText) {
+    if (url.includes("historyMsg")) handleHistoryMsgResponse(responseText);
+    if (url.includes("getBossData")) handleGetBossDataResponse(responseText);
+    if (url.includes("joblist.json") || url.includes("recommend/job/list")) {
+      handleJobListResponse(responseText);
+    }
+  }
 
   // ========================================
   // 拦截 XMLHttpRequest
@@ -19,21 +31,32 @@
 
   XMLHttpRequest.prototype.send = function() {
     const url = this._url || "";
-
-    if (url.includes("historyMsg")) {
+    if (WATCH_RE.test(url)) {
       this.addEventListener("load", function() {
-        handleHistoryMsgResponse(this.responseText);
+        routeResponse(url, this.responseText);
       });
     }
-
-    if (url.includes("getBossData")) {
-      this.addEventListener("load", function() {
-        handleGetBossDataResponse(this.responseText);
-      });
-    }
-
     return origSend.apply(this, arguments);
   };
+
+  // ========================================
+  // 拦截 fetch（部分接口走 fetch）
+  // ========================================
+  const origFetch = window.fetch;
+  if (origFetch) {
+    window.fetch = function(input) {
+      const p = origFetch.apply(this, arguments);
+      try {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        if (WATCH_RE.test(url)) {
+          p.then((res) => {
+            res.clone().text().then((t) => routeResponse(url, t)).catch(() => {});
+          }).catch(() => {});
+        }
+      } catch (_) {}
+      return p;
+    };
+  }
 
   // ========================================
   // 响应处理函数
@@ -84,6 +107,40 @@
       }
     } catch(e) {
       console.error("[inject.js] getBossData 解析错误:", e);
+    }
+  }
+
+  function handleJobListResponse(responseText) {
+    try {
+      const data = JSON.parse(responseText);
+      const list = data?.zpData?.jobList;
+      if (!Array.isArray(list) || !list.length) return;
+
+      const jobs = list.map(j => ({
+        encryptJobId: j.encryptJobId || "",
+        securityId: j.securityId || "",
+        lid: j.lid || "",
+        jobName: j.jobName || "",
+        salaryDesc: j.salaryDesc || "",
+        brandName: j.brandName || "",
+        city: j.cityName || "",
+        area: j.areaDistrict || "",
+        experience: j.jobExperience || "",
+        degree: j.jobDegree || "",
+        skills: j.skills || [],
+        labels: j.jobLabels || [],
+        bossName: j.bossName || "",
+        bossTitle: j.bossTitle || "",
+        industry: j.brandIndustry || "",
+        scale: j.brandScaleName || "",
+        stage: j.brandStageName || "",
+        welfare: j.welfareList || []
+      }));
+
+      console.log("[inject.js] 拦到职位列表:", jobs.length, "条");
+      window.postMessage({ type: "BOSS_JOB_LIST", jobs }, "*");
+    } catch(e) {
+      console.error("[inject.js] joblist 解析错误:", e);
     }
   }
 })();
