@@ -249,6 +249,60 @@
   }
 
   // -------------------------------------------------------------------------
+  // 聊天页工具栏动作：发简历 / 换微信 / 换电话（点按钮 + 自动确认弹窗）
+  // -------------------------------------------------------------------------
+  function findByText(texts, root = document) {
+    const els = Array.from(root.querySelectorAll("button, a, span, div, li, p"));
+    // 只要可见的、文本精确匹配的；同文本嵌套时文档序靠后的更深，取最后一个
+    return els.filter((el) => {
+      if (el.offsetParent === null) return false;
+      const t = (el.innerText || "").trim();
+      return texts.includes(t);
+    });
+  }
+
+  function findVisibleDialog() {
+    const dialogs = Array.from(
+      document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"]')
+    ).filter((el) => el.offsetParent !== null && (el.innerText || "").trim().length > 0);
+    return dialogs.pop() || null;
+  }
+
+  const CHAT_ACTIONS = {
+    send_resume: ["发简历", "发送简历"],
+    exchange_wechat: ["换微信", "交换微信"],
+    exchange_phone: ["换电话", "交换电话"],
+  };
+
+  async function chatAction(args) {
+    const action = String(args?.action || "");
+    const labels = CHAT_ACTIONS[action];
+    if (!labels) throw new Error("action 必须是 send_resume / exchange_wechat / exchange_phone");
+    const btns = findByText(labels);
+    if (!btns.length) {
+      throw new Error(`没找到「${labels[0]}」按钮（需已点开一个对话；DOM 改版用 debug_dom 排查）`);
+    }
+    simulateClick(btns[btns.length - 1]);
+    await sleep(1200);
+
+    // 确认弹窗：只在弹窗容器内找确认按钮，避免误点聊天框的「发送」
+    const dialog = findVisibleDialog();
+    if (!dialog) {
+      return { action, clicked: labels[0], confirmed: null, note: "未见确认弹窗，请回读页面确认是否已发出" };
+    }
+    const dialogText = clean(dialog.innerText).slice(0, 300);
+    const confirmBtns = findByText(["发送", "确定", "确认", "申请", "继续"], dialog);
+    if (!confirmBtns.length) {
+      return { action, clicked: labels[0], confirmed: null, dialog: dialogText, note: "弹窗里没找到确认按钮，未确认" };
+    }
+    const confirmBtn = confirmBtns[confirmBtns.length - 1];
+    const confirmLabel = (confirmBtn.innerText || "").trim();
+    simulateClick(confirmBtn);
+    await sleep(800);
+    return { action, clicked: labels[0], confirmed: confirmLabel, dialog: dialogText };
+  }
+
+  // -------------------------------------------------------------------------
   // 推荐/搜索页：职位列表、点开职位、读详情、主动打招呼
   // -------------------------------------------------------------------------
   function readJobs(args) {
@@ -382,6 +436,7 @@
     open_conversation: (args) => openConversation(args),
     fill_reply: (args) => fillReply(args),
     send_reply: () => sendReply(),
+    chat_action: (args) => chatAction(args),
     read_jobs: (args) => readJobs(args),
     open_job: (args) => openJob(args),
     read_job_detail: () => readJobDetail(),

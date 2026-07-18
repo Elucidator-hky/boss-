@@ -141,6 +141,23 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "chat_action",
+    description:
+      "在当前打开的聊天对话里执行工具栏动作：send_resume（发简历）/ exchange_wechat（换微信）/ exchange_phone（换电话）。会自动点击弹出的确认框（发送/确定），返回弹窗内容供核对。⚠️ 真实对外动作，需用户明确同意后调用。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["send_resume", "exchange_wechat", "exchange_phone"],
+          description: "send_resume=发简历，exchange_wechat=换微信，exchange_phone=换电话",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "read_jobs",
     description:
       "读取推荐页/搜索页的职位列表（来自 API 拦截，数据干净：含 encryptJobId/securityId/职位名/薪资/公司/城市/经验学历/技能标签/公司规模融资阶段）。列表随页面滚动分页累积，用 scroll_jobs 加载更多。需在 Chrome 打开 Boss 推荐或搜索页。",
