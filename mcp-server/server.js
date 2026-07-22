@@ -15,8 +15,24 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { WebSocketServer } from "ws";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const WS_PORT = Number(process.env.BOSS_WS_PORT || 8765);
+// 新消息信号文件：扩展推来"页面有新消息"事件时，往这里追加一行。
+// 外部后台进程（watch-messages.sh）盯着它的行数，一变就唤醒 Claude 去查 Boss（事件驱动，替代轮询）。
+// 路径优先取环境变量 BOSS_SIGNAL_FILE，否则落在项目根目录（server.js 上一级），
+// 不再硬编码 ~/job/boss，方便他人 clone 到任意目录复用。
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SIGNAL_FILE =
+  process.env.BOSS_SIGNAL_FILE || path.join(__dirname, "..", ".new-message-signal");
+// 启动时清空信号文件：避免跨会话无限累积增长（每次 MCP 重启从干净状态开始）。
+try {
+  fs.writeFileSync(SIGNAL_FILE, "");
+} catch (e) {
+  console.error("[boss-mcp] 初始化信号文件失败:", e.message);
+}
 
 // ---------------------------------------------------------------------------
 // WebSocket：等待浏览器扩展连进来
@@ -42,6 +58,15 @@ wss.on("connection", (ws) => {
       return;
     }
     if (msg.type === "pong") return; // 心跳
+    // 扩展推来的页面事件（新消息）→ 写信号文件，唤醒外部盯梢进程
+    if (msg.type === "event") {
+      try {
+        fs.appendFileSync(SIGNAL_FILE, `${Date.now()} ${msg.event || "event"}\n`);
+      } catch (e) {
+        console.error("[boss-mcp] 写信号文件失败:", e.message);
+      }
+      return;
+    }
     const p = pending.get(msg.id);
     if (!p) return;
     clearTimeout(p.timer);
@@ -53,6 +78,12 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     console.error("[boss-mcp] 扩展断开");
     if (extSocket === ws) extSocket = null;
+    // 连接断了：把还在等结果的请求立即失败，不必干等到 15s 超时。
+    for (const [, p] of pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error("扩展连接已断开，请确认 Chrome / 扩展 / Boss 页面正常后重试。"));
+    }
+    pending.clear();
   });
   ws.on("error", (e) => console.error("[boss-mcp] 扩展连接错误:", e.message));
 });
@@ -143,7 +174,7 @@ const TOOLS = [
   {
     name: "chat_action",
     description:
-      "在当前打开的聊天对话里执行工具栏动作：send_resume（发简历）/ exchange_wechat（换微信）/ exchange_phone（换电话）。会自动点击弹出的确认框（发送/确定），返回弹窗内容供核对。⚠️ 真实对外动作，需用户明确同意后调用。",
+      "在当前打开的聊天对话里执行工具栏动作：send_resume（发简历）/ exchange_wechat（换微信）/ exchange_phone（换电话）。⚠️ 真实对外动作。注意：三个动作 Boss 有门控——双方互发过消息后才可用，否则点击被静默忽略。send_resume 会弹「选择简历」框：不带 resume 参数时只返回可选简历清单（关弹窗不发送）；带 resume 关键词才选中并真实发送。",
     inputSchema: {
       type: "object",
       properties: {
@@ -151,6 +182,11 @@ const TOOLS = [
           type: "string",
           enum: ["send_resume", "exchange_wechat", "exchange_phone"],
           description: "send_resume=发简历，exchange_wechat=换微信，exchange_phone=换电话",
+        },
+        resume: {
+          type: "string",
+          description:
+            "仅 send_resume 用：要发送的简历文件名关键词（如「AI 应用」）。不传则只列清单不发送。",
         },
       },
       required: ["action"],
@@ -249,6 +285,36 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "dom_click",
+    description:
+      "【通用原语】按 CSS 选择器点击页面任意可见元素（带真实坐标的完整事件链）。配合 debug_dom 先看结构再点，任何 Boss 页面可用，无需专用工具。⚠️ 点击可能触发真实对外动作，谨慎使用。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "CSS 选择器" },
+        text: { type: "string", description: "可选：在命中元素中筛选 innerText 包含此文本的" },
+        index: { type: "number", description: "命中多个时取第几个（可见元素序号，默认 0）" },
+      },
+      required: ["selector"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "dom_fill",
+    description:
+      "【通用原语】往页面任意 input/textarea/contenteditable 填入文本（原生 setter + input/change 事件，Vue/React 表单可感知）。只填不提交。配合 debug_dom 先看结构。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        selector: { type: "string", description: "CSS 选择器" },
+        value: { type: "string", description: "要填入的文本" },
+        index: { type: "number", description: "命中多个时取第几个（可见元素序号，默认 0）" },
+      },
+      required: ["selector", "value"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
@@ -260,10 +326,24 @@ const server = new Server(
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
+// 拟人节奏：真实外发动作之间强制随机间隔，防止机器般的连续操作触发风控
+const WRITE_CMDS = new Set(["send_reply", "chat_action", "greet"]);
+const PACE_MIN_MS = 8000;
+const PACE_JITTER_MS = 7000;
+let lastWriteAt = 0;
+async function paceWrite(cmd) {
+  if (!WRITE_CMDS.has(cmd)) return;
+  const gap = PACE_MIN_MS + Math.floor(Math.random() * PACE_JITTER_MS);
+  const wait = lastWriteAt + gap - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastWriteAt = Date.now();
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args } = req.params;
   try {
     if (!TOOL_NAMES.has(name)) throw new Error("未知工具: " + name);
+    await paceWrite(name);
     // 工具名与扩展命令名一一对应，直接透传；导航类命令要等页面加载，超时放宽
     const timeout = name === "search_jobs" || name === "navigate" ? 30000 : 15000;
     const data = await callExtension(name, args || {}, timeout);

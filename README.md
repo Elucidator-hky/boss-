@@ -1,134 +1,76 @@
-# BOSS 直聘聊天助手
+# Boss 直聘 AI 求职助手
 
-GitHub 仓库：https://github.com/Elucidator-hky/boss-
+用 **AI（Claude Code / Codex 等）+ 浏览器扩展 + MCP**，让 AI 帮你在 Boss 直聘上**读岗位、筛选、代聊、协助投递**——你只在「确认面试时间」这种关键节点出面。
 
-Chrome/Edge 浏览器扩展，帮助求职者在 BOSS 直聘聊天页面提高沟通效率。
+> 本仓库是**通用工具 + 规则模板**。代码通用，规则（你的求职标准/口径）复制模板填自己的即可。
 
-## 功能介绍
+## 它是什么
 
-### 1. 自动回复 - 告别重复回答
+```
+   你 / AI（Claude Code 或 Codex）        ← 大脑：读 JD、判断、措辞
+        ↕  MCP over stdio
+   mcp-server/server.js                   ← 中转：把 AI 的指令转成浏览器操作
+        ↕  WebSocket (127.0.0.1:8765)
+   浏览器扩展（src/）                       ← 手：在你登录的真实 Chrome 里操作 Boss
+        ↕  DOM
+   Boss 直聘网页
+   ＋ watch-messages.sh（可选）            ← 实时唤醒：HR 一发消息就叫醒 AI
+```
 
-HR 每天问同样的问题：「在职还是离职？」「期望薪资？」「目前在哪个城市？」
+**为什么这样最安全**：扩展跑在你平时登录的真实 Chrome 里，没有 webdriver 指纹、没有 CDP、用你的真实会话——Boss 的反自动化检测抓不到（Playwright/Selenium 会被直接屏蔽）。
 
-填好个人信息后，HR 提问时**自动生成精准回复**到输入框，你确认后发送即可。
+## 快速开始（5 步）
 
-### 2. 智能打招呼 - 告别千篇一律
+### 1. 装 MCP server 依赖
+```bash
+cd mcp-server && npm install
+```
+（需要 Node 18+）
 
-群发「你好，对贵司岗位感兴趣」这种打招呼语，HR 早就免疫了。
+### 2. 加载浏览器扩展
+1. Chrome 地址栏进 `chrome://extensions/`
+2. 打开右上角「开发者模式」
+3. 「加载已解压的扩展程序」→ 选**本仓库根目录**
+4. 扩展「BOSS 聊天助手」出现即成功
 
-点击按钮，根据 JD 具体要求**自动生成个性化开场白**，提高 HR 回复率。
+### 3. 配置 MCP（Claude Code / Codex）
+见 **[docs/接入-ClaudeCode-和-Codex.md](docs/接入-ClaudeCode-和-Codex.md)**。本质就是让你的 agent 用 `node mcp-server/server.js` 起这个 MCP server。
 
-## 安装方法
+### 4. 填你的配置（⭐ 灵魂，决定效果）
+```bash
+cp AGENTS.example.md AGENTS.md          # Codex 读这个；Claude Code 用 CLAUDE.md 同理
+cp templates/求职标准.example.md templates/求职标准.md
+cp templates/面试口径.example.md templates/面试口径.md
+```
+然后把里面所有 `<...>` 换成你自己的真实信息。**这一步不做，AI 只有手没有脑，跑不起来。**
 
-### 方式一：下载 Release 压缩包（推荐）
+### 5. 开用
+1. Chrome 打开并登录 `https://www.zhipin.com/web/geek/chat`
+2. 在 Claude Code / Codex 里让 AI「读一下我的 Boss 消息」，它就会按你的规则代聊了。
 
-1. 进入 [Releases 页面](../../releases)
-2. 下载最新版本的 `boss-chat-helper-vX.X.X.zip`
-3. 解压到任意文件夹
-4. 打开浏览器扩展页面：
-   - Chrome：地址栏输入 `chrome://extensions/`
-   - Edge：地址栏输入 `edge://extensions/`
-5. 开启右上角「开发者模式」
-6. 点击「加载已解压的扩展程序」
-7. 选择刚才解压的文件夹
+## 实时消息唤醒（可选）
+```bash
+zsh watch-messages.sh &     # 后台盯梢：HR 一发消息就唤醒 AI
+```
+原理见 [docs/架构与原理.md](docs/架构与原理.md)。不用也行——手动让 AI 定时扫消息即可。
 
-### 方式二：下载源码
+## 目录结构
+```
+boss/
+├── AGENTS.example.md          规则模板（复制成 AGENTS.md / CLAUDE.md 填）
+├── templates/                 求职标准 / 面试口径 模板
+├── manifest.json              扩展清单
+├── src/                       浏览器扩展（content/background/options）
+├── mcp-server/                MCP 服务器（server.js + package.json）
+├── watch-messages.sh          盯梢脚本（实时唤醒，可选）
+└── docs/                      接入说明 + 架构原理
+```
 
-1. 点击页面上的绿色 `Code` 按钮
-2. 选择 `Download ZIP`
-3. 解压后按上述步骤 4-7 操作
-
-## 使用说明
-
-### 第一步：配置 API
-
-插件需要调用大语言模型 API 来生成回复。
-
-1. 打开 BOSS 直聘聊天页面：https://www.zhipin.com/web/geek/chat
-2. 点击页面右下角的悬浮按钮（🤖）
-3. 点击「⚙️ 配置 API」
-4. 填写 API 信息：
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| API Base | 接口地址 | `https://api.deepseek.com/v1` |
-| API Key | 接口密钥 | `sk-xxx` |
-| Model | 模型名称 | `deepseek-chat` |
-
-**推荐模型**：
-- [DeepSeek](https://platform.deepseek.com/)：`deepseek-chat`，便宜好用
-- [阿里云百炼](https://bailian.console.aliyun.com/)：`qwen-plus`、`qwen-max`
-
-5. 点击「测试连接」验证配置是否正确
-6. 点击「保存」
-
-### 第二步：填写个人信息
-
-1. 点击悬浮菜单的「👤 个人信息」
-2. 填写你的求职信息：
-
-| 字段 | 示例 |
-|------|------|
-| 当前城市 | 北京 |
-| 离职状态 | 已离职 |
-| 工作年限 | 3年 |
-| 学历 | 本科 |
-| 求职方向 | Java后端 |
-| 技术栈 | Java, Spring Boot, MySQL, Redis |
-| 职业技能 | 熟悉微服务架构，有高并发系统开发经验... |
-| 项目经验 | 负责过日均百万订单的电商系统... |
-
-信息越完整，自动回复效果越好。
-
-### 第三步：开始使用
-
-- **自动回复**：默认开启，HR 提问时自动生成回复到输入框
-- **打招呼语**：点击悬浮菜单「💬 生成打招呼语」手动触发
-
-## 常见问题
-
-### Q: 每次打开浏览器都提示「禁用开发者模式扩展」？
-
-这是 Chrome 的安全机制，点击取消即可继续使用。如果觉得烦，可以：
-- 使用 Edge 浏览器（提示更少）
-- 安装「火绒」等软件拦截弹窗
-
-### Q: 自动回复没有触发？
-
-检查以下条件：
-1. 自动回复开关是否开启（悬浮菜单「🔄 自动生成回复」）
-2. API 是否配置正确（点击「测试连接」验证）
-3. 个人信息是否填写（至少填写几个常见字段）
-4. 输入框是否为空（有内容时不会自动填充）
-
-### Q: 生成的回复不准确？
-
-- 确保个人信息填写完整、准确
-- 插件只会使用你填写的信息回答，不会编造
-
-### Q: 支持哪些浏览器？
-
-- Google Chrome（推荐 88+）
-- Microsoft Edge（推荐 88+）
-- 其他 Chromium 内核浏览器
-
-## 隐私说明
-
-- 所有数据保存在浏览器本地，不会上传到任何服务器
-- API 调用直接从你的浏览器发送到你配置的 API 服务商
-- 插件不会收集任何个人信息
-
-## 更新日志
-
-### v0.0.1
-- 初始版本
-- 支持自动回复 HR 常见问题
-- 支持生成个性化打招呼语
+## 注意事项
+- **只开一个 Boss 标签页**：多个标签时命令发给你当前聚焦的那个。
+- **真实发送 / 发简历 / 换微信不可撤回**：规则里默认这些可自动，介意就改成手动确认。
+- **简历只写真实经历**：面试会深挖，编造必翻车。确保 Boss 上传的是你真实的最新简历再让 AI 发。
+- **合规**：仅辅助你本人求职、模拟人工节奏操作；请遵守 Boss 直聘条款，别群发骚扰。
 
 ## 开源协议
-
-[MIT License](LICENSE)
-
-## 反馈与建议
-
-如有问题或建议，欢迎提交 [Issue](../../issues)。
+[MIT](LICENSE)

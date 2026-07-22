@@ -1,2 +1,11 @@
 node_modules/
 .DS_Store
+
+# 运行时文件（盯梢信号，不该进仓库）
+.new-message-signal
+*.log
+
+# 开发笔记（含个人信息，不分享）
+# ⚠️ MCP接入说明.md 之前已被 git 跟踪，仅 gitignore 不够，需 git rm --cached
+MCP接入说明.md
+需求分析.md

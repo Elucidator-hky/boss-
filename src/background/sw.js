@@ -623,6 +623,14 @@ function buildUserPrompt(dialogue) {
     }
   }
 
+  // bridge.js 探测到页面有新消息 → 通过 WS 推给 MCP server（事件驱动唤醒）
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.channel === "boss-bridge" && msg.event === "new_message") {
+      bglog("检测到新消息，推送事件");
+      safeSend({ type: "event", event: "new_message" });
+    }
+  });
+
   async function getBossTab() {
     // 1. 优先：最近聚焦的 Chrome 窗口里、当前正显示的 Boss 标签（= 用户眼前这个）
     const [focused] = await chrome.tabs.query({

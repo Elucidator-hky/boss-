@@ -117,10 +117,20 @@
   // -------------------------------------------------------------------------
   // 命令
   // -------------------------------------------------------------------------
-  function readCurrentPage() {
+  async function readCurrentPage() {
     const page = classifyPage();
     const base = { url: location.href, title: document.title, page };
     if (page === "chat") {
+      // 消息列表是虚拟滚动，滚出视口的会被回收；先滚到底保证最新消息已渲染
+      const ul = document.querySelector("ul.im-list");
+      const scroller = ul && scrollableAncestor(ul);
+      if (scroller) {
+        scroller.scrollTop = scroller.scrollHeight;
+        await sleep(400);
+      }
+      // 切换对话后职位数据由页面异步请求推来；若还没到最多再等 ~1.5s。
+      // 宁可返回 null 也不返回上一个对话的残留（messages 直接读当前 DOM，始终准确）。
+      for (let i = 0; i < 6 && !bridgeJobData; i++) await sleep(250);
       return {
         ...base,
         job: bridgeJobData,
@@ -165,16 +175,50 @@
   }
 
   function simulateClick(el) {
-    const opts = { bubbles: true, cancelable: true, view: window };
+    // 带上元素中心的真实坐标：0,0 的事件既可能被处理器忽略，也更像机器人
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const opts = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      screenX: x,
+      screenY: y + 80,
+    };
     try {
       el.dispatchEvent(new PointerEvent("pointerdown", { ...opts, pointerType: "mouse" }));
     } catch (_) {}
     el.dispatchEvent(new MouseEvent("mousedown", opts));
+    // 真人点击自带焦点，很多组件（如 Boss 的只读输入框选择器）靠 focus 才弹面板
+    try {
+      if (typeof el.focus === "function") el.focus();
+    } catch (_) {}
     try {
       el.dispatchEvent(new PointerEvent("pointerup", { ...opts, pointerType: "mouse" }));
     } catch (_) {}
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     el.dispatchEvent(new MouseEvent("click", opts));
+  }
+
+  function simulateHover(el) {
+    const r = el.getBoundingClientRect();
+    const opts = {
+      cancelable: true,
+      view: window,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2,
+    };
+    el.dispatchEvent(new MouseEvent("mouseover", { ...opts, bubbles: true }));
+    // mouseenter 不冒泡，对目标和各级祖先分别派发
+    let n = el;
+    while (n && n !== document.body) {
+      n.dispatchEvent(new MouseEvent("mouseenter", { ...opts, bubbles: false }));
+      n = n.parentElement;
+    }
+    el.dispatchEvent(new MouseEvent("mousemove", { ...opts, bubbles: true }));
   }
 
   function openConversation(args) {
@@ -194,6 +238,10 @@
     // Boss 的点击监听在 li 内层 .friend-content 上，事件要派发到它
     const target = li.querySelector(".friend-content") || li;
     simulateClick(target);
+    // 切换了对话：旧职位缓存立即作废，等新对话的 API 数据推来。
+    // 否则 read_current_page 可能返回上一个对话残留的 job/jobInfo（曾导致按错误 JD 判断岗位）。
+    bridgeJobData = null;
+    bridgeJobInfo = null;
     return { clicked: clean(li.innerText).replace(/\n+/g, " | ").slice(0, 100) };
   }
 
@@ -262,38 +310,109 @@
   }
 
   function findVisibleDialog() {
+    // Boss 聊天工具栏的确认框类名是 sentence-popover，且嵌在按钮元素内部
     const dialogs = Array.from(
-      document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"]')
+      document.querySelectorAll(
+        '[class*="dialog"], [class*="popup"], [class*="modal"], .sentence-popover'
+      )
     ).filter((el) => el.offsetParent !== null && (el.innerText || "").trim().length > 0);
     return dialogs.pop() || null;
   }
 
+  // d-c 是 Boss 埋点编号，比文字/aria-label 稳（按钮文字带空格且 aria-label 为空）
   const CHAT_ACTIONS = {
-    send_resume: ["发简历", "发送简历"],
-    exchange_wechat: ["换微信", "交换微信"],
-    exchange_phone: ["换电话", "交换电话"],
+    send_resume: { dc: "62009", labels: ["发简历", "发送简历"] },
+    exchange_wechat: { dc: "62011", labels: ["换微信", "交换微信"] },
+    exchange_phone: { dc: "62007", labels: ["换电话", "交换电话"] },
   };
 
   async function chatAction(args) {
     const action = String(args?.action || "");
-    const labels = CHAT_ACTIONS[action];
-    if (!labels) throw new Error("action 必须是 send_resume / exchange_wechat / exchange_phone");
-    const btns = findByText(labels);
-    if (!btns.length) {
+    const conf = CHAT_ACTIONS[action];
+    if (!conf) throw new Error("action 必须是 send_resume / exchange_wechat / exchange_phone");
+    const labels = conf.labels;
+    let btn = document.querySelector(`.chat-controls [d-c="${conf.dc}"]`);
+    if (!btn || btn.offsetParent === null) {
+      const scope = document.querySelector(".chat-controls") || document;
+      const btns = findByText(labels, scope);
+      btn = btns[btns.length - 1] || null;
+    }
+    if (!btn) {
       throw new Error(`没找到「${labels[0]}」按钮（需已点开一个对话；DOM 改版用 debug_dom 排查）`);
     }
-    simulateClick(btns[btns.length - 1]);
-    await sleep(1200);
 
-    // 确认弹窗：只在弹窗容器内找确认按钮，避免误点聊天框的「发送」
-    const dialog = findVisibleDialog();
-    if (!dialog) {
-      return { action, clicked: labels[0], confirmed: null, note: "未见确认弹窗，请回读页面确认是否已发出" };
+    // tooltip 类组件的面板常要 mouseenter 才挂载；先 hover，再依次试内层按钮/外层容器，
+    // 每次点完轮询最多 1.8s 等弹窗出现
+    const container = btn.closest(".toolbar-btn-content") || btn.parentElement || btn;
+    simulateHover(btn);
+    await sleep(300);
+    let dialog = null;
+    for (const target of [btn, container]) {
+      simulateClick(target);
+      for (let i = 0; i < 6 && !dialog; i++) {
+        await sleep(300);
+        dialog = findVisibleDialog();
+      }
+      if (dialog) break;
     }
+    if (!dialog) {
+      const html = (container.outerHTML || "").slice(0, 600);
+      return {
+        action,
+        clicked: labels[0],
+        confirmed: null,
+        note: "点击后未出现确认弹窗（可能未触发处理器），请回读页面确认",
+        container_html: html,
+      };
+    }
+    // 发简历弹窗是「请选择要发送的简历」：必须先选中一份，发送键才解禁
+    const resumeList = dialog.querySelector(".resume-list");
+    if (action === "send_resume" && resumeList) {
+      const items = Array.from(resumeList.querySelectorAll(".list-item"));
+      const names = items.map((li) => clean(li.querySelector(".resume-name")?.innerText || ""));
+      const closeDialog = () => {
+        const x = document.querySelector(".boss-popup__close");
+        if (x) simulateClick(x);
+      };
+      const kw = String(args?.resume || "").trim();
+      if (!kw) {
+        closeDialog();
+        return {
+          action,
+          sent: false,
+          resumes: names,
+          note: "有多份简历可选，需用 resume 参数指定文件名关键词。已关闭弹窗，未发送。",
+        };
+      }
+      const target = items.find((li) => (li.innerText || "").includes(kw));
+      if (!target) {
+        closeDialog();
+        throw new Error(`简历列表里没有包含「${kw}」的文件。现有：${names.join(" / ")}（已关弹窗未发送）`);
+      }
+      simulateClick(target);
+      await sleep(500);
+      const sendBtn = dialog.querySelector("button.btn-confirm");
+      if (!sendBtn || sendBtn.disabled || /disabled/.test(sendBtn.className)) {
+        closeDialog();
+        throw new Error("选中简历后发送按钮仍是禁用态，未发送（DOM 可能改版，用 debug_dom 排查）");
+      }
+      simulateClick(sendBtn);
+      await sleep(800);
+      return {
+        action,
+        sent: true,
+        resume: clean(target.querySelector(".resume-name")?.innerText || kw),
+        note: "已点发送，请回读确认聊天里出现简历消息",
+      };
+    }
+
     const dialogText = clean(dialog.innerText).slice(0, 300);
-    const confirmBtns = findByText(["发送", "确定", "确认", "申请", "继续"], dialog);
+    // 跳过禁用态按钮（发送键在满足条件前是 disabled，盲点等于没点）
+    const confirmBtns = findByText(["发送", "确定", "确认", "申请", "继续"], dialog).filter(
+      (el) => !el.disabled && !/\bdisabled\b/.test(el.className || "")
+    );
     if (!confirmBtns.length) {
-      return { action, clicked: labels[0], confirmed: null, dialog: dialogText, note: "弹窗里没找到确认按钮，未确认" };
+      return { action, clicked: labels[0], confirmed: null, dialog: dialogText, note: "弹窗里没找到可用的确认按钮，未确认" };
     }
     const confirmBtn = confirmBtns[confirmBtns.length - 1];
     const confirmLabel = (confirmBtn.innerText || "").trim();
@@ -377,17 +496,19 @@
       return { greeted: false, note: "该职位已沟通过（按钮为「继续沟通」），未重复打招呼" };
     }
     simulateClick(btn);
-    await sleep(1500);
-    // 打招呼后可能弹「发送成功」对话框，点「留在当前页面/稍后再说/取消」留在列表页
-    const stay = Array.from(document.querySelectorAll("a, button")).find(
-      (el) =>
-        el.offsetParent !== null && /留在|稍后|取消/.test((el.innerText || "").trim())
-    );
-    if (stay) {
-      simulateClick(stay);
-      await sleep(300);
-    }
-    return { greeted: true, note: stay ? "已打招呼，已关闭弹窗留在当前页" : "已打招呼（未见弹窗）" };
+    // 点击后 Boss 多半直接跳转聊天页，跳转会销毁本脚本——必须立即返回，
+    // 否则消息通道被关闭、MCP 收到假报错。弹窗（发送成功→留在当前页）改为后台处理。
+    setTimeout(() => {
+      const stay = Array.from(document.querySelectorAll("a, button")).find(
+        (el) =>
+          el.offsetParent !== null && /留在|稍后|取消/.test((el.innerText || "").trim())
+      );
+      if (stay) simulateClick(stay);
+    }, 1500);
+    return {
+      greeted: true,
+      note: "已点「立即沟通」建立对话；该动作通常不自动发招呼语，页面会跳到聊天页。请用 read_current_page 确认后，用 fill_reply + send_reply 发定制招呼。",
+    };
   }
 
   function scrollableAncestor(el) {
@@ -417,6 +538,52 @@
   }
 
   // -------------------------------------------------------------------------
+  // 通用原语：看(debug_dom)/点(dom_click)/填(dom_fill)
+  // 让 Claude 临场读 DOM 后直接操作任意页面，新界面无需再写专用代码
+  // -------------------------------------------------------------------------
+  function visibleBySelector(sel) {
+    return Array.from(document.querySelectorAll(sel)).filter((e) => e.offsetParent !== null);
+  }
+
+  function domClick(args) {
+    const sel = String(args?.selector || "").trim();
+    if (!sel) throw new Error("需要 selector（先用 debug_dom 看结构）");
+    let els = visibleBySelector(sel);
+    const text = String(args?.text || "").trim();
+    if (text) els = els.filter((e) => (e.innerText || "").includes(text));
+    const el = els[Number(args?.index) || 0];
+    if (!el) throw new Error(`没找到可见的匹配元素（selector=${sel}${text ? ` text含「${text}」` : ""}，命中 ${els.length} 个）`);
+    simulateClick(el);
+    return {
+      clicked: clean(el.innerText || el.getAttribute("aria-label") || el.className || sel).slice(0, 120),
+      matched: els.length,
+    };
+  }
+
+  function domFill(args) {
+    const sel = String(args?.selector || "").trim();
+    if (!sel) throw new Error("需要 selector");
+    const el = visibleBySelector(sel)[Number(args?.index) || 0];
+    if (!el) throw new Error("没找到可见的匹配元素");
+    const value = String(args?.value ?? "");
+    const tag = el.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea") {
+      // 用原生 setter 绕过 Vue/React 的 value 劫持，否则框架收不到变更
+      const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    } else if (el.isContentEditable) {
+      el.focus();
+      el.innerText = value;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    } else {
+      throw new Error(`元素是 <${tag}>，不是 input/textarea/contenteditable，填不了`);
+    }
+    return { filled: value.slice(0, 100), tag };
+  }
+
+  // -------------------------------------------------------------------------
   // 调试：查看指定选择器的 DOM 结构（测试阶段排查选择器用）
   // -------------------------------------------------------------------------
   function debugDom(args) {
@@ -424,8 +591,26 @@
     const maxChars = Math.min(Number(args?.max_chars) || 3000, 20000);
     const all = document.querySelectorAll(sel);
     const nodes = Array.from(all).slice(0, Number(args?.max_nodes) || 3);
+    // 表单控件的 value 是属性不进 outerHTML，单独收集，否则预填内容不可见
+    const values = [];
+    nodes.forEach((n, i) => {
+      const fields = n.matches && n.matches("input, textarea, select")
+        ? [n]
+        : Array.from(n.querySelectorAll("input, textarea, select"));
+      fields.forEach((f) => {
+        const v = String(f.value ?? "");
+        if (!v || f.type === "hidden") return;
+        values.push({
+          node: i,
+          tag: f.tagName.toLowerCase(),
+          placeholder: (f.placeholder || "").slice(0, 30),
+          value: v.slice(0, 600),
+        });
+      });
+    });
     return {
       count: all.length,
+      values,
       html: nodes.map((n) => n.outerHTML).join("\n---\n").slice(0, maxChars),
     };
   }
@@ -443,6 +628,8 @@
     greet: () => greet(),
     scroll_jobs: (args) => scrollJobs(args),
     debug_dom: (args) => debugDom(args),
+    dom_click: (args) => domClick(args),
+    dom_fill: (args) => domFill(args),
   };
 
   chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
@@ -454,11 +641,54 @@
     }
     // 支持同步/异步命令（greet、scroll_jobs 等需要等待页面反应）
     Promise.resolve()
-      .then(() => handler(req.args || {}))
+      .then(() => { lastActionAt = Date.now(); return handler(req.args || {}); })
       .then((data) => sendResponse({ ok: true, data }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   });
+
+  // -------------------------------------------------------------------------
+  // 新消息事件推送：盯左侧对话列表，有新消息就通知 background → MCP server
+  // （事件驱动唤醒 Claude，替代纯轮询）
+  // -------------------------------------------------------------------------
+  let lastActionAt = 0; // 命令 handler 里赋值；新逻辑不再依赖它过滤，仅保留声明
+  let lastMsgCount = -1; // 顶部「消息」未读计数上次值，-1=未初始化
+
+  // 顶部导航「消息」链接内的未读计数 .nav-chat-num（<a ka="header-message">消息<span class="nav-chat-num">N</span></a>）：
+  // 全页面都在（含搜索页），只有 HR 真发来新消息时数字才增加；自己发消息/已读不会让它变大 → 天然过滤空唤醒。
+  // 无未读时该 span 是 display:none（值0），用 textContent 读隐藏值。
+  function readMsgBadge() {
+    const el = document.querySelector(".nav-chat-num");
+    if (!el) return 0;
+    const n = parseInt((el.textContent || "").replace(/[^\d]/g, ""), 10);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function notifyNewMessage() {
+    const cur = readMsgBadge();
+    if (lastMsgCount < 0) { lastMsgCount = cur; return; } // 首次只记基准
+    if (cur > lastMsgCount) {
+      lastMsgCount = cur; // 未读增加 = 有新消息，唤醒
+      try {
+        chrome.runtime.sendMessage({ channel: "boss-bridge", event: "new_message" });
+      } catch (_) {}
+    } else {
+      lastMsgCount = cur; // 未读减少/不变：更新基准，不唤醒（消除已读/自发消息的空唤醒）
+    }
+  }
+
+  let notifyTimer = null;
+  function setupNewMessageWatcher() {
+    lastMsgCount = readMsgBadge();
+    // 监听整个 body：任何变化都触发 notify，但 notify 只在 .notice-badge 数字变大时才写信号
+    const obs = new MutationObserver(() => {
+      clearTimeout(notifyTimer);
+      notifyTimer = setTimeout(notifyNewMessage, 800); // 防抖 0.8s，更快
+    });
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+    console.log("[boss-assistant] 消息徽标监听已挂载（notice-badge，全页面有效）");
+  }
+  setupNewMessageWatcher();
 
   console.log("[boss-assistant] bridge.js 已加载");
 })();
