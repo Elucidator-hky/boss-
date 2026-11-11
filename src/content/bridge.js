@@ -119,7 +119,7 @@
   // -------------------------------------------------------------------------
   async function readCurrentPage() {
     const page = classifyPage();
-    const base = { url: location.href, title: document.title, page };
+    const base = { url: location.href, title: document.title, page, bridgeScriptVersion: "0.2.0" };
     if (page === "chat") {
       // 消息列表是虚拟滚动，滚出视口的会被回收；先滚到底保证最新消息已渲染
       const ul = document.querySelector("ul.im-list");
@@ -283,6 +283,13 @@
     const content = (input.textContent || "").trim();
     if (!content) throw new Error("输入框为空，请先用 fill_reply 填内容");
     input.focus();
+    const sendButton = Array.from(document.querySelectorAll(".btn-send")).find(
+      (el) => el.offsetParent !== null && !el.disabled && el.getAttribute("aria-disabled") !== "true"
+    );
+    if (sendButton) {
+      sendButton.click();
+      return { attempted: content, method: "button", verified: false, note: "已点击发送，需回读聊天记录确认实际送达。" };
+    }
     const evOpts = {
       bubbles: true,
       cancelable: true,
@@ -293,7 +300,7 @@
     };
     input.dispatchEvent(new KeyboardEvent("keydown", evOpts));
     input.dispatchEvent(new KeyboardEvent("keyup", evOpts));
-    return { sent: content };
+    return { attempted: content, method: "enter", verified: false, note: "已触发发送，需回读聊天记录确认实际送达。" };
   }
 
   // -------------------------------------------------------------------------
@@ -507,7 +514,7 @@
     }, 1500);
     return {
       greeted: true,
-      note: "已点「立即沟通」建立对话；该动作通常不自动发招呼语，页面会跳到聊天页。请用 read_current_page 确认后，用 fill_reply + send_reply 发定制招呼。",
+      note: "已点「立即沟通」建立对话；页面可能发送默认招呼或打开页内沟通框。先 read_current_page 核对实际对话和已发内容，再决定是否补充定制招呼。",
     };
   }
 
@@ -664,29 +671,82 @@
     return isNaN(n) ? 0 : n;
   }
 
+  // ---- 信号源 2：当前打开对话的 HR 消息增量 ----
+  // 当前对话的新消息会被 Boss 自动标记已读、不进顶部红点（信号源 1 盲区）。
+  // 这里数 ul.im-list 里 li.item-friend（HR 发的，含面试邀请/取消卡片）的数量：
+  //  - 只数 friend：自己发的(item-myself)和系统条(item-system，多为自己操作触发)不算，避免自己把自己吵醒
+  //  - 对话切换（active 项变化）重置基线不触发
+  //  - 数量减少（虚拟滚动回收/切换渲染）只更新基线不触发，与红点逻辑一致
+  let lastChatKey = null; // 当前选中项的 DOM 引用；预览文字变化不算切换对话
+  let lastFriendCount = -1;
+
+  function readActiveChatKey() {
+    try {
+      const lis = getConversationLis();
+      const active = lis.find(
+        (l) =>
+          l.querySelector(".friend-content.selected") ||
+          /active|selected|cur/.test(l.className || "")
+      );
+      return active || null;
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function readFriendMsgCount() {
+    const ul = document.querySelector("ul.im-list");
+    if (!ul) return -1; // 不在聊天页/无对话打开
+    return ul.querySelectorAll("li.message-item.item-friend").length;
+  }
+
   function notifyNewMessage() {
+    let fire = false;
+
+    // 信号源 1：顶部未读红点（其他对话的新消息）
     const cur = readMsgBadge();
-    if (lastMsgCount < 0) { lastMsgCount = cur; return; } // 首次只记基准
-    if (cur > lastMsgCount) {
-      lastMsgCount = cur; // 未读增加 = 有新消息，唤醒
+    if (lastMsgCount < 0) {
+      lastMsgCount = cur; // 首次只记基准
+    } else if (cur > lastMsgCount) {
+      lastMsgCount = cur;
+      fire = true;
+    } else {
+      lastMsgCount = cur; // 未读减少/不变：更新基准，不唤醒（消除已读/自发消息的空唤醒）
+    }
+
+    // 信号源 2：当前对话 HR 消息增量（不产生红点的那种）
+    const key = readActiveChatKey();
+    const fc = readFriendMsgCount();
+    if (key !== lastChatKey) {
+      // 切换了对话（或首次）：只重置基线，不触发
+      lastChatKey = key;
+      lastFriendCount = fc;
+    } else if (fc >= 0 && lastFriendCount >= 0 && fc > lastFriendCount) {
+      lastFriendCount = fc;
+      fire = true;
+    } else if (fc >= 0) {
+      lastFriendCount = fc; // 减少/不变：更新基线（虚拟滚动回收等），不触发
+    }
+
+    if (fire) {
       try {
         chrome.runtime.sendMessage({ channel: "boss-bridge", event: "new_message" });
       } catch (_) {}
-    } else {
-      lastMsgCount = cur; // 未读减少/不变：更新基准，不唤醒（消除已读/自发消息的空唤醒）
     }
   }
 
   let notifyTimer = null;
   function setupNewMessageWatcher() {
     lastMsgCount = readMsgBadge();
-    // 监听整个 body：任何变化都触发 notify，但 notify 只在 .notice-badge 数字变大时才写信号
+    lastChatKey = readActiveChatKey();
+    lastFriendCount = readFriendMsgCount();
+    // 监听整个 body：任何变化都触发 notify；notify 内部按两个信号源分别判断是否真有新消息
     const obs = new MutationObserver(() => {
       clearTimeout(notifyTimer);
-      notifyTimer = setTimeout(notifyNewMessage, 800); // 防抖 0.8s，更快
+      notifyTimer = setTimeout(notifyNewMessage, 800); // 防抖 0.8s
     });
     obs.observe(document.body, { childList: true, subtree: true, characterData: true });
-    console.log("[boss-assistant] 消息徽标监听已挂载（notice-badge，全页面有效）");
+    console.log("[boss-assistant] 消息监听已挂载（红点 + 当前对话双信号源）");
   }
   setupNewMessageWatcher();
 

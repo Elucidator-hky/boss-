@@ -751,6 +751,7 @@ function buildUserPrompt(dialogue) {
     }
     ws.onopen = () => {
       connecting = false;
+      safeSend({ type: "hello", version: chrome.runtime.getManifest().version });
       bglog("已连接 MCP server");
     };
     ws.onmessage = async (event) => {

@@ -9,3 +9,13 @@ node_modules/
 # ⚠️ MCP接入说明.md 之前已被 git 跟踪，仅 gitignore 不够，需 git rm --cached
 MCP接入说明.md
 需求分析.md
+
+.signal-cursor
+.new-message-signal.cursor
+AGENTS.md
+CLAUDE.md
+.mcp.json
+.codex/
+templates/求职标准.md
+templates/面试口径.md
+投递记录.md

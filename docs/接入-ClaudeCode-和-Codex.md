@@ -1,71 +1,75 @@
-# 接入 Claude Code / Codex（及其他 MCP agent）
+# 接入 Claude Code / Codex
 
-`mcp-server/server.js` 是**标准 stdio MCP server**（用官方 `@modelcontextprotocol/sdk`），
-所以**任何支持 MCP 的 agent 都能连**。下面给两个最常见的，其它（Cursor / Cline 等）同理。
+## 先安装
 
-> 把下文的 `<仓库路径>` 换成你 clone 下来的绝对路径，例如 `/Users/you/boss`。
+在仓库的 `mcp-server` 中运行 `npm ci`。Chrome 加载仓库根目录作为扩展，打开一个已登录的 Boss 标签页。MCP 使用 AI 客户端本身的模型，扩展设置页的模型 Key 无需填写。
 
----
+所有路径替换为本机绝对路径，包含空格时保留引号。Windows 的 JSON 路径用 `/` 或双反斜杠。
 
-## 一、Claude Code
+## Codex
 
-### 方式 A：项目级 `.mcp.json`（推荐）
-在你运行 Claude Code 的目录（或其父目录）建 `.mcp.json`：
+在终端执行：
+
+```sh
+codex mcp add boss-assistant -- node "/absolute/path/boss/mcp-server/server.js"
+codex mcp list
+```
+
+也可在 `~/.codex/config.toml` 或受信任项目的 `.codex/config.toml` 添加：
+
+```toml
+[mcp_servers.boss-assistant]
+command = "node"
+args = ["/absolute/path/boss/mcp-server/server.js"]
+startup_timeout_sec = 15
+tool_timeout_sec = 60
+```
+
+重启 AI 会话，复制规则模板为 `AGENTS.md`，在仓库目录启动任务。配置方式见 [OpenAI 官方 MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。
+
+## Claude Code
+
+在任务目录创建 `.mcp.json`：
+
 ```json
 {
   "mcpServers": {
     "boss-assistant": {
       "command": "node",
-      "args": ["<仓库路径>/mcp-server/server.js"]
+      "args": ["/absolute/path/boss/mcp-server/server.js"]
     }
   }
 }
 ```
 
-### 方式 B：命令行添加
-```bash
-claude mcp add boss-assistant -- node <仓库路径>/mcp-server/server.js
-```
+重启会话，按客户端要求启用该 MCP。规则模板复制为 `CLAUDE.md`。`/mcp` 可核对连接；新增工具或改代码后重启会话，以确保加载当前版本。
 
-### 生效
-- 重启 Claude Code 会话，或在会话里 `/mcp` → 选 `boss-assistant` → reconnect。
-- 规则文件：Claude Code 读 **`CLAUDE.md`**——把 `AGENTS.md` 内容复制一份成 `CLAUDE.md` 即可。
+## 首次验收
 
----
+1. `mcp-server` 中执行 `npm run doctor`：检查桥接版本、扩展连接和控制权。这只查询状态，不操作页面。
+2. 让 AI **实际调用** `connection_status`：`bridgeVersion` 和 `extensionVersion` 应为 `0.2.0`，`extensionConnected` 应为 `true`。
+3. 调用 `read_current_page`，核对实际 URL、页面、对话，`bridgeScriptVersion` 应为 `0.2.0`；缺失时刷新页面。账号资料不足时由本人核对浏览器账号，不能凭聊天对象猜账号。
+4. 确认 AI 使用的工具来自 `boss-assistant`，读取 `AGENTS.md` / `CLAUDE.md` 和对应 skill。先做少量只读筛岗，再在用户授权范围内投递。
 
-## 二、Codex（OpenAI）
+## 连接排查
 
-Codex CLI 在 `~/.codex/config.toml` 里配 MCP server：
-```toml
-[mcp_servers.boss-assistant]
-command = "node"
-args = ["<仓库路径>/mcp-server/server.js"]
-```
-> 具体字段名以你安装的 Codex 版本的官方文档为准（MCP 配置各版本略有差异），但本质都是「用 stdio 启动 `node server.js`」。
-
-### 规则文件
-Codex 读 **`AGENTS.md`**——本仓库的 `AGENTS.example.md` 就是照这个约定写的，复制填好放项目根即可。
-
----
-
-## 三、连接自检
-1. **MCP 是否连上**：Claude Code `/mcp` 看 `boss-assistant` 状态；Codex 看它的 MCP 列表。
-2. **扩展是否连上**：`chrome://extensions` →「BOSS 聊天助手」→「Service Worker」控制台，看到已连接 MCP server 的日志。
-3. **报「Receiving end does not exist」**：刷新 Boss 页面，让 `bridge.js` 重新注入。
-4. **报「扩展未连接」**：确认 Chrome 开着、扩展已加载、开了一个 zhipin.com 页面。
-
----
-
-## 四、改代码后怎么生效（常踩坑）
-| 改了什么 | 生效方式 |
+| 现象 | 处理 |
 |---|---|
-| `src/`（bridge.js / inject.js / sw.js） | `chrome://extensions` 重载扩展 **+ 刷新 Boss 页面** |
-| `mcp-server/server.js` | 重启 agent 会话，或 `/mcp` reconnect（server 进程是会话启动时拉起的） |
-| **新增 MCP 工具** | 光 reconnect 可能不够，重启 agent 会话最稳 |
-| `watch-messages.sh` | 杀掉旧进程重新 `zsh watch-messages.sh &` |
+| AI 没有 Boss 工具 | 核对 MCP 配置、Node 路径和安装目录，重启会话；Chrome 装了扩展不代表 AI 加载了 MCP |
+| `extensionConnected: false` | 加载或重载扩展，打开 Boss 并刷新页面，等待几秒再自检 |
+| `Receiving end does not exist` | 刷新 Boss 标签页，让页面脚本重新注入 |
+| `other_session` / 另一会话正在操作 | 原任务完成后调用 `release_control`，或关闭原会话；当前会话等待交接 |
+| 本地桥接版本不匹配 / 旧端口占用 | 核对监听 8765 的 PID 和启动命令，确认对应任务已结束后关闭那个旧会话/进程，再重启新会话；不批量杀 Node |
+| 工具超时、连接断开 | 当前动作可能已执行；恢复后先读聊天、按钮状态和记录再决定下一步，外发动作不自动重试 |
+| 发出指令但聊天没消息 | 读聊天历史与输入框，按代聊 skill 有限补救；工具的 `attempted` 只代表触发动作 |
+| 账号异常、验证码、平台限制 | 立即停止自动操作，由本人核对并按平台提示处理，保存具体警告和调用日志 |
 
----
+macOS/Linux 可用 `lsof -nP -iTCP:8765 -sTCP:LISTEN` 查监听者，再用 `ps -p <PID> -o pid,command` 核对。Windows PowerShell 可用 `Get-NetTCPConnection -LocalPort 8765 -State Listen`，再以 `Get-CimInstance Win32_Process -Filter "ProcessId=<PID>"` 查命令行。旧会话仍在工作时保留它，安排完成后更新。
 
-## 五、可选：自定义端口 / 信号文件路径
-- WebSocket 端口默认 `8765`，改：环境变量 `BOSS_WS_PORT`。
-- 盯梢信号文件默认在仓库根 `.new-message-signal`，改：环境变量 `BOSS_SIGNAL_FILE`（server.js 和 watch-messages.sh 都读它，要设成同一个值）。
+## 多会话与配置
+
+每个 AI 客户端启动自己的 stdio MCP 适配器，适配器共用一个本地 WebSocket 桥接进程。桥接自动启动；最后一个客户端断开 60 秒后退出。浏览器控制权按完整工作流持有，防止另一任务在填入与发送之间切换页面。
+
+默认端口 `8765`。`BOSS_WS_PORT` 只配置服务端；自定义端口还须同步修改 `src/background/sw.js` 中的 `WS_URL` 并重载扩展。日常保持默认即可。
+
+信号文件由桥接唯一写入，默认仓库根 `.new-message-signal`，`BOSS_SIGNAL_FILE` 可指定绝对路径。多个客户端共用桥接时，以 `connection_status.signalFile` 返回的实际路径为准。重启不会清空已有信号。

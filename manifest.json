@@ -1,10 +1,17 @@
 {
   "manifest_version": 3,
   "name": "BOSS 聊天助手",
-  "version": "0.0.1",
-  "description": "Boss 直聘聊天页监听与配置保存。",
-  "permissions": ["storage", "scripting", "tabs", "alarms"],
-  "host_permissions": ["<all_urls>"],
+  "version": "0.2.0",
+  "description": "通过本地 MCP 桥接读取 Boss 岗位、消息并执行已授权操作。",
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "options_page": "src/options/index.html",
   "action": {
     "default_title": "BOSS 聊天助手"
@@ -14,26 +21,42 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.zhipin.com/*"],
-      "js": ["src/content/inject.js"],
+      "matches": [
+        "https://www.zhipin.com/*"
+      ],
+      "js": [
+        "src/content/inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.zhipin.com/web/geek/chat*"],
-      "js": ["src/content/index.js"],
+      "matches": [
+        "https://www.zhipin.com/web/geek/chat*"
+      ],
+      "js": [
+        "src/content/index.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://www.zhipin.com/*"],
-      "js": ["src/content/bridge.js"],
+      "matches": [
+        "https://www.zhipin.com/*"
+      ],
+      "js": [
+        "src/content/bridge.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/content/inject.js"],
-      "matches": ["https://www.zhipin.com/*"]
+      "resources": [
+        "src/content/inject.js"
+      ],
+      "matches": [
+        "https://www.zhipin.com/*"
+      ]
     }
   ]
 }
