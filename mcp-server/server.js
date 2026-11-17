@@ -69,7 +69,7 @@ const TOOLS = [
   {
     name: "chat_action",
     description:
-      "在当前打开的聊天对话里执行工具栏动作：send_resume（发简历）/ exchange_wechat（换微信）/ exchange_phone（换电话）。⚠️ 真实对外动作。注意：三个动作 Boss 有门控——双方互发过消息后才可用，否则点击被静默忽略。send_resume 会弹「选择简历」框：不带 resume 参数时只返回可选简历清单（关弹窗不发送）；带 resume 关键词才选中并真实发送。",
+      "在当前聊天执行工具栏动作：send_resume（发简历）/ exchange_wechat（换微信）/ exchange_phone（换电话）。send_resume 不带 resume 时只列清单；带唯一文件名关键词时提交附件。同一职位或招聘者已有附件、请求或待核尝试时先回读。只有新增 BOSS 正式回执才返回 sent:true。真实对外动作须在用户授权范围内执行。",
     inputSchema: {
       type: "object",
       properties: {
@@ -132,7 +132,7 @@ const TOOLS = [
   {
     name: "greet",
     description:
-      "对当前打开的职位详情点「立即沟通」，真实发起打招呼（页面可能发送默认招呼语，先回读核对）。若按钮是「继续沟通」说明已聊过，不会重复。⚠️ 真实对外动作，按用户本次已授权范围调用；频率过高有风控风险，建议一次会话内少量使用。",
+      "在独立职位详情页核对职位和招聘者后点一次「立即沟通」。已有会话或发送登记时回到原会话核对。BOSS 自动发出的默认消息即为首次招呼。返回 job_detail_required 时，先打开返回的详情页再检查。真实对外动作须在用户授权范围内执行。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
