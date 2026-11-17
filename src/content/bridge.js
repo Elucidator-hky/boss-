@@ -109,7 +109,8 @@
       const text = extractText(li);
       if (!text) continue;
       const time = clean(li.querySelector(".item-time .time")?.innerText || "");
-      out.push({ who, text: text.replace(/\n+/g, " ").trim(), time });
+      const messageId = li.getAttribute("data-mid");
+      out.push({ who, text: text.replace(/\n+/g, " ").trim(), time, ...(messageId ? { messageId } : {}) });
     }
     return out;
   }
@@ -277,11 +278,35 @@
     return { filled: text };
   }
 
+  const DEFAULT_GREETING = "能和您沟通一下吗？我对这个岗位兴趣很浓。";
+  const replyAttempts = new WeakMap();
+
+  function guardReply(input, content) {
+    const messages = collectMessages(100).filter((message) => message.messageId &&
+      (message.who === "我" || message.who === "HR"));
+    const last = messages.at(-1);
+    const lastInbound = messages.findLastIndex((message) => message.who === "HR");
+    const lastDefault = messages.findLastIndex((message) => message.who === "我" && message.text === DEFAULT_GREETING);
+    const normalized = (text) => clean(text).replace(/\s+/g, " ");
+    const repeated = last?.who === "我" && normalized(last.text) === normalized(content);
+    const asksToSendResume = /(?:方便|可以|能否|请问).{0,24}(?:发|发送|看|收).{0,10}简历/.test(content);
+    const extraGreeting = asksToSendResume && lastDefault > lastInbound;
+    const key = JSON.stringify([bridgeJobData?.encryptJobId, bridgeJobData?.encryptBossId,
+      messages[lastInbound]?.messageId, normalized(content)]);
+    const attempts = replyAttempts.get(input) || new Set();
+    if (repeated || extraGreeting || attempts.has(key)) {
+      throw new Error("这条招呼或回复已经发送或待核对，请查看原会话。");
+    }
+    attempts.add(key);
+    replyAttempts.set(input, attempts);
+  }
+
   function sendReply() {
     const input = findChatInput();
     if (!input) throw new Error("找不到聊天输入框");
     const content = (input.textContent || "").trim();
     if (!content) throw new Error("输入框为空，请先用 fill_reply 填内容");
+    guardReply(input, content);
     input.focus();
     const sendButton = Array.from(document.querySelectorAll(".btn-send")).find(
       (el) => el.offsetParent !== null && !el.disabled && el.getAttribute("aria-disabled") !== "true"
@@ -333,10 +358,72 @@
     exchange_phone: { dc: "62007", labels: ["换电话", "交换电话"] },
   };
 
+  async function claimOutbound(kind, jobId, recruiterId) {
+    if (!jobId || !recruiterId) throw new Error("未核实职位和招聘者身份。");
+    const response = await chrome.runtime.sendMessage({ type: "BOSS_CLAIM_OUTBOUND", kind, jobId, recruiterId });
+    if (response?.ok !== true || typeof response.claimed !== "boolean") {
+      throw new Error(response?.error || "未能登记发送尝试，请先回读原会话。");
+    }
+    return response.claimed;
+  }
+
+  function resumeHistory(timeline) {
+    const receipts = [];
+    const deliveries = [];
+    let pending = false;
+    for (const row of timeline?.querySelectorAll("li.message-item[data-mid]") || []) {
+      const id = row.getAttribute("data-mid");
+      if (!/^\d+$/.test(id || "")) continue;
+      const content = row.querySelector(".message-content");
+      const text = clean(content?.innerText || content?.textContent).replace(/\s+/g, " ");
+      if (row.classList.contains("item-system")) {
+        if (/^(?:对方已同意[，,]\s*)?您的附件简历.*?已发送给(?:对方|Boss)(?:\s*点击查看附件)?[。！]?$/i.test(text)) {
+          deliveries.push(id);
+          receipts.push(id);
+        } else if (/^对方已查看(?:了)?您的附件简历[。！]?$/.test(text)) {
+          receipts.push(id);
+        } else if (/^附件简历请求已发送[。！]?$/.test(text)) {
+          pending = true;
+        }
+      } else if (row.classList.contains("item-myself") && (content?.querySelector(".resume-card, .resume-name") ||
+          (content?.querySelector(".file-card, .file-name, .item-file, .message-file, .message-card-top-title") && /附件简历|\.pdf\b/i.test(text)))) {
+        pending = true;
+      }
+    }
+    return { receipts, deliveries, pending };
+  }
+
+  function latestMessageId(timeline) {
+    return Array.from(timeline.querySelectorAll("li.message-item[data-mid]"))
+      .map((row) => row.getAttribute("data-mid"))
+      .filter((id) => /^\d+$/.test(id || ""))
+      .reduce((latest, id) => BigInt(id) > latest ? BigInt(id) : latest, 0n);
+  }
+
   async function chatAction(args) {
     const action = String(args?.action || "");
     const conf = CHAT_ACTIONS[action];
     if (!conf) throw new Error("action 必须是 send_resume / exchange_wechat / exchange_phone");
+    const keyword = String(args?.resume || "").trim();
+    const isResume = action === "send_resume";
+    const selected = isResume ? document.querySelector(".friend-content.selected") : null;
+    const jobId = isResume ? bridgeJobData?.encryptJobId : null;
+    const bossId = isResume ? bridgeJobData?.encryptBossId : null;
+    const sameChat = () => selected?.isConnected && document.querySelector(".friend-content.selected") === selected &&
+      jobId && bossId && bridgeJobData?.encryptJobId === jobId && bridgeJobData?.encryptBossId === bossId;
+    if (isResume && keyword && !sameChat()) {
+      throw new Error("未核实当前职位和对话，无法发送简历。");
+    }
+    if (isResume && findResumeChooser()) {
+      throw new Error("已有简历弹窗，请先回读上次发送结果并关闭弹窗。");
+    }
+    if (isResume && keyword) {
+      const timeline = chatTimeline();
+      if (!timeline) throw new Error("聊天记录尚未加载，无法核对简历发送历史。");
+      const history = resumeHistory(timeline);
+      if (history.receipts.length) return { action, sent: false, status: "already_sent", receiptId: history.receipts.at(-1) };
+      if (history.pending) return { action, sent: null, status: "unconfirmed", note: "已有附件简历请求，等待核对结果。" };
+    }
     const labels = conf.labels;
     let btn = document.querySelector(`.chat-controls [d-c="${conf.dc}"]`);
     if (!btn || btn.offsetParent === null) {
@@ -346,6 +433,9 @@
     }
     if (!btn) {
       throw new Error(`没找到「${labels[0]}」按钮（需已点开一个对话；DOM 改版用 debug_dom 排查）`);
+    }
+    if (isResume && keyword && (!isEnabled(btn) || pageBlocked())) {
+      return { action, sent: false, status: "not_submitted", note: "BOSS 当前未开放发送简历。" };
     }
 
     // tooltip 类组件的面板常要 mouseenter 才挂载；先 hover，再依次试内层按钮/外层容器，
@@ -373,16 +463,16 @@
       };
     }
     // 发简历弹窗是「请选择要发送的简历」：必须先选中一份，发送键才解禁
-    const resumeList = dialog.querySelector(".resume-list");
-    if (action === "send_resume" && resumeList) {
-      const items = Array.from(resumeList.querySelectorAll(".list-item"));
-      const names = items.map((li) => clean(li.querySelector(".resume-name")?.innerText || ""));
+    if (isResume) {
+      const chooser = findResumeChooser();
+      if (!chooser) return { action, sent: false, status: "not_submitted", note: "未识别到简历选择框，未发送。" };
+      const items = visibleElements(chooser.list, ".list-item");
+      const names = items.map((li) => clean(li.querySelector(".resume-name")?.textContent || ""));
       const closeDialog = () => {
-        const x = document.querySelector(".boss-popup__close");
+        const x = chooser.list.closest(".boss-popup")?.querySelector(".boss-popup__close");
         if (x) simulateClick(x);
       };
-      const kw = String(args?.resume || "").trim();
-      if (!kw) {
+      if (!keyword) {
         closeDialog();
         return {
           action,
@@ -391,26 +481,57 @@
           note: "有多份简历可选，需用 resume 参数指定文件名关键词。已关闭弹窗，未发送。",
         };
       }
-      const target = items.find((li) => (li.innerText || "").includes(kw));
-      if (!target) {
+      const matches = items.filter((_, index) => names[index].includes(keyword));
+      if (matches.length !== 1) {
         closeDialog();
-        throw new Error(`简历列表里没有包含「${kw}」的文件。现有：${names.join(" / ")}（已关弹窗未发送）`);
+        throw new Error(`未能唯一匹配简历「${keyword}」，未发送。`);
+      }
+      const target = matches[0];
+      const fileName = names[items.indexOf(target)];
+      const history = resumeHistory(chatTimeline());
+      if (history.receipts.length) {
+        closeDialog();
+        return { action, sent: false, status: "already_sent", resume: fileName, receiptId: history.receipts.at(-1) };
+      }
+      if (history.pending) {
+        closeDialog();
+        return { action, sent: null, status: "unconfirmed", resume: fileName, note: "此前提交仍未确认，请回读会话，勿重复发送。" };
+      }
+      if (!sameChat() || !chatTimeline() || isEnabled(chooser.button)) {
+        closeDialog();
+        throw new Error("会话、聊天记录或简历初始选择状态未核实，未发送。");
       }
       simulateClick(target);
-      await sleep(500);
-      const sendBtn = dialog.querySelector("button.btn-confirm");
-      if (!sendBtn || sendBtn.disabled || /disabled/.test(sendBtn.className)) {
+      const selectedFile = await waitFor(() => {
+        const current = findResumeChooser();
+        return current?.list === chooser.list && current.button === chooser.button &&
+          target.isConnected && isEnabled(current.button);
+      }, 1200);
+      if (!selectedFile || !sameChat() || !chatTimeline()) {
         closeDialog();
-        throw new Error("选中简历后发送按钮仍是禁用态，未发送（DOM 可能改版，用 debug_dom 排查）");
+        throw new Error("选中简历后未能核实会话或发送按钮，未发送。");
       }
-      simulateClick(sendBtn);
-      await sleep(800);
-      return {
-        action,
-        sent: true,
-        resume: clean(target.querySelector(".resume-name")?.innerText || kw),
-        note: "已点发送，请回读确认聊天里出现简历消息",
-      };
+      const latest = resumeHistory(chatTimeline());
+      if (latest.receipts.length || latest.pending) {
+        closeDialog();
+        return { action, sent: false, status: latest.receipts.length ? "already_sent" : "unconfirmed", resume: fileName };
+      }
+      if (!await claimOutbound("resume", jobId, bossId)) {
+        closeDialog();
+        return { action, sent: null, status: "unconfirmed", resume: fileName, note: "该职位或招聘者已有发送登记，请回读原会话。" };
+      }
+      const timeline = chatTimeline();
+      const finalHistory = resumeHistory(timeline);
+      if (!sameChat() || findResumeChooser()?.button !== chooser.button || !isEnabled(chooser.button) ||
+          !timeline || finalHistory.receipts.length || finalHistory.pending || pageBlocked()) {
+        throw new Error("登记后会话或确认按钮发生变化，请回读原会话。");
+      }
+      const newestBefore = latestMessageId(timeline);
+      simulateClick(chooser.button);
+      const receiptId = await waitFor(() => sameChat() &&
+        resumeHistory(chatTimeline()).deliveries.findLast((id) => BigInt(id) > newestBefore), 4500);
+      if (receiptId) return { action, sent: true, status: "sent", resume: fileName, receiptId };
+      return { action, sent: null, status: "unconfirmed", resume: fileName, note: "未发现新增 BOSS 发送回执，请回读会话，勿重复发送。" };
     }
 
     const dialogText = clean(dialog.innerText).slice(0, 300);
@@ -426,6 +547,53 @@
     simulateClick(confirmBtn);
     await sleep(800);
     return { action, clicked: labels[0], confirmed: confirmLabel, dialog: dialogText };
+  }
+
+  function visibleElements(root, selector) {
+    return Array.from(root.querySelectorAll(selector)).filter((element) => {
+      const style = getComputedStyle(element);
+      return element.isConnected && element.getClientRects().length > 0 && style.visibility === "visible";
+    });
+  }
+
+  async function waitFor(check, timeout) {
+    const deadline = Date.now() + timeout;
+    do {
+      const result = check();
+      if (result) return result;
+      await sleep(150);
+    } while (Date.now() < deadline);
+    return null;
+  }
+
+  function chatTimeline() {
+    const lists = visibleElements(document, "ul.im-list");
+    return lists.length === 1 ? lists[0] : null;
+  }
+
+  function pageBlocked() {
+    const overlays = visibleElements(document, ".dialog-wrap, .boss-popup__wrapper, [role='dialog'], [class*='toast']");
+    return overlays.some((overlay) => /验证码|安全验证|账号异常|操作频繁|操作受限|请先登录/.test(overlay.innerText || ""));
+  }
+
+  function findResumeChooser() {
+    const lists = visibleElements(document, ".resume-list");
+    if (lists.length !== 1) return null;
+    const list = lists[0];
+    for (let popup = list.parentElement; popup && popup !== document.body; popup = popup.parentElement) {
+      if (!popup.matches(".boss-popup, [class*='boss-popup__'], [role='dialog']")) continue;
+      const buttons = visibleElements(popup, "button.btn-confirm");
+      if (buttons.length !== 1 || !["发送", "发送简历"].includes(clean(buttons[0].textContent))) continue;
+      if (!/选择要发送的简历/.test(clean(popup.innerText))) continue;
+      return { list, button: buttons[0] };
+    }
+    return null;
+  }
+
+  function isEnabled(button) {
+    return !button.disabled && button.getAttribute("aria-disabled") !== "true" &&
+      !/(?:不可用|双方回复后可用)/.test(button.getAttribute("aria-label") || "") &&
+      !button.classList.contains("unable") && !/\bdisabled\b/.test(button.className);
   }
 
   // -------------------------------------------------------------------------
@@ -486,36 +654,40 @@
     return { text: clean(el.innerText).slice(0, 6000) };
   }
 
-  async function greet() {
-    const all = Array.from(document.querySelectorAll("a, button")).filter((el) => {
-      const t = (el.innerText || "").trim();
-      return t === "立即沟通" || t === "继续沟通";
-    });
-    if (!all.length) throw new Error("没找到「立即沟通」按钮（先 open_job 打开职位详情）");
-    const visible = all.filter((el) => el.offsetParent !== null);
-    // 优先详情面板里的按钮（卡片上悬浮也可能有）
-    const btn =
-      visible.find((el) => el.closest('[class*="job-detail"], .job-detail-box')) ||
-      visible[0] ||
-      all[0];
-    const label = (btn.innerText || "").trim();
-    if (label === "继续沟通") {
-      return { greeted: false, note: "该职位已沟通过（按钮为「继续沟通」），未重复打招呼" };
+  async function clickGreeting(button) {
+    if (clean(button.innerText) === "继续沟通" || button.getAttribute("data-isfriend") === "true") {
+      return { greeted: false, status: "already_contacted", note: "该职位已有会话，请沿用原会话。" };
     }
-    simulateClick(btn);
-    // 点击后 Boss 多半直接跳转聊天页，跳转会销毁本脚本——必须立即返回，
-    // 否则消息通道被关闭、MCP 收到假报错。弹窗（发送成功→留在当前页）改为后台处理。
-    setTimeout(() => {
-      const stay = Array.from(document.querySelectorAll("a, button")).find(
-        (el) =>
-          el.offsetParent !== null && /留在|稍后|取消/.test((el.innerText || "").trim())
-      );
-      if (stay) simulateClick(stay);
-    }, 1500);
-    return {
-      greeted: true,
-      note: "已点「立即沟通」建立对话；页面可能发送默认招呼或打开页内沟通框。先 read_current_page 核对实际对话和已发内容，再决定是否补充定制招呼。",
-    };
+    const redirect = button.getAttribute("redirect-url");
+    const explicit = redirect?.startsWith("/web/geek/chat?") ? new URL(redirect, location.origin) : null;
+    const panelJobId = button.getAttribute("ka")?.match(/^cpc_job_list_chat_([\w~-]+)$/)?.[1];
+    const jobId = explicit?.searchParams.get("jobId") || panelJobId;
+    const recruiterId = explicit?.searchParams.get("id");
+    if (!jobId || !recruiterId) {
+      return { greeted: false, status: "job_detail_required",
+        ...(panelJobId ? { detailUrl: `${location.origin}/job_detail/${panelJobId}.html` } : {}),
+        note: "请打开对应的独立职位详情页，核对招聘者后再建立会话。" };
+    }
+    if (location.pathname !== `/job_detail/${jobId}.html` || clean(button.innerText) !== "立即沟通" ||
+        button.offsetParent === null || pageBlocked()) {
+      throw new Error("当前职位或招聘按钮未通过核对。");
+    }
+    if (!await claimOutbound("greeting", jobId, recruiterId)) {
+      return { greeted: false, status: "already_attempted", note: "该职位或招聘者已有招呼登记，请回读原会话。" };
+    }
+    if (!button.isConnected || button.getAttribute("redirect-url") !== redirect ||
+        clean(button.innerText) !== "立即沟通" || button.getAttribute("data-isfriend") === "true" || pageBlocked()) {
+      throw new Error("登记后职位或招聘按钮发生变化，请回读原会话。");
+    }
+    simulateClick(button);
+    return { greeted: true, status: "attempted", note: "请回读原会话。BOSS 自动发出的招呼即为首次招呼。" };
+  }
+
+  async function greet() {
+    const buttons = Array.from(document.querySelectorAll(".job-banner a.btn-startchat, .job-detail-box a.op-btn-chat"))
+      .filter((button) => button.offsetParent !== null && ["立即沟通", "继续沟通"].includes(clean(button.innerText)));
+    if (buttons.length !== 1) throw new Error("请先打开一个确切的职位详情，核对唯一的沟通按钮。");
+    return clickGreeting(buttons[0]);
   }
 
   function scrollableAncestor(el) {
@@ -552,7 +724,34 @@
     return Array.from(document.querySelectorAll(sel)).filter((e) => e.offsetParent !== null);
   }
 
-  function domClick(args) {
+  const nativeResumeFlows = new WeakMap();
+
+  async function clickResumeControl(button, nativeRequest) {
+    const selected = document.querySelector(".friend-content.selected");
+    const { encryptJobId: jobId, encryptBossId: recruiterId } = bridgeJobData || {};
+    const timeline = chatTimeline();
+    const same = () => selected?.isConnected && document.querySelector(".friend-content.selected") === selected &&
+      bridgeJobData?.encryptJobId === jobId && bridgeJobData?.encryptBossId === recruiterId && chatTimeline() === timeline;
+    const contextMatches = () => timeline && same() && button.isConnected && isEnabled(button) && !pageBlocked();
+    if (!jobId || !recruiterId || !contextMatches()) throw new Error("未核实简历提交按钮及原会话。");
+    const history = resumeHistory(timeline);
+    if (history.receipts.length || history.pending) throw new Error("原会话已有简历回执或待确认请求，请回读原会话。");
+
+    const flow = nativeResumeFlows.get(selected);
+    const followNative = !nativeRequest && flow?.jobId === jobId && flow.recruiterId === recruiterId;
+    if (followNative ? flow.confirmed : !await claimOutbound("resume", jobId, recruiterId)) {
+      throw new Error("该职位或招聘者已有简历提交登记，请回读原会话。");
+    }
+    const latest = resumeHistory(timeline);
+    if (!contextMatches() || latest.receipts.length || latest.pending) {
+      throw new Error("登记后会话、按钮或发送历史发生变化，请回读原会话。");
+    }
+    if (nativeRequest) nativeResumeFlows.set(selected, { jobId, recruiterId, confirmed: false });
+    if (followNative) flow.confirmed = true;
+    simulateClick(button);
+  }
+
+  async function domClick(args) {
     const sel = String(args?.selector || "").trim();
     if (!sel) throw new Error("需要 selector（先用 debug_dom 看结构）");
     let els = visibleBySelector(sel);
@@ -560,7 +759,26 @@
     if (text) els = els.filter((e) => (e.innerText || "").includes(text));
     const el = els[Number(args?.index) || 0];
     if (!el) throw new Error(`没找到可见的匹配元素（selector=${sel}${text ? ` text含「${text}」` : ""}，命中 ${els.length} 个）`);
-    simulateClick(el);
+    const greeting = el.closest("a.btn-startchat, a.op-btn-chat");
+    const greetingLabel = clean(greeting?.innerText);
+    if (greetingLabel === "立即沟通") {
+      const result = await clickGreeting(greeting);
+      return { ...result, matched: els.length, clicked: result.greeted ? greetingLabel : false };
+    }
+    const send = el.closest("button.btn-send, .chat-conversation .btn-send");
+    if (send && classifyPage() === "chat") {
+      const input = findChatInput();
+      const draft = clean(input?.textContent);
+      if (!draft || !isEnabled(send)) throw new Error("未核实可发送的聊天回复。");
+      guardReply(input, draft);
+    }
+    const cardButton = el.closest("li.item-friend[data-mid] .message-card-buttons .card-btn");
+    const card = cardButton?.closest("li.item-friend[data-mid]");
+    const accept = cardButton && clean(cardButton.innerText) === "同意" && /^\d+$/.test(card.getAttribute("data-mid") || "") &&
+      /附件简历.*是否同意/.test(extractText(card) || "");
+    const finalButton = el.closest(".boss-popup__wrapper:has(.resume-list) button.btn-confirm, .panel-resume.sentence-popover .btn-sure-v2");
+    if (accept || finalButton) await clickResumeControl(accept ? cardButton : finalButton, accept);
+    else simulateClick(el);
     return {
       clicked: clean(el.innerText || el.getAttribute("aria-label") || el.className || sel).slice(0, 120),
       matched: els.length,
